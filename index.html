@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8"><title>3MF Splitter</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#f6f6f4;--pn:#fff;--tx:#1d1d1b;--mu:#6b6b66;--bd:#dcdcd6;--ac:#0f8f5f;--ac2:#fff;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--pn:#1f1f1d;--tx:#ececE8;--mu:#9a9a93;--bd:#35352f;--ac:#3ecf94;--ac2:#06251a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#161615;--pn:#1f1f1d;--tx:#ececE8;--mu:#9a9a93;--bd:#35352f;--ac:#3ecf94;--ac2:#06251a;color-scheme:dark}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+#app{display:flex;height:100%}
+#side{width:310px;flex:none;overflow:auto;background:var(--pn);border-right:1px solid var(--bd);padding:14px}
+#view{flex:1;min-width:0;position:relative}
+#view canvas{position:absolute;inset:0;width:100%;height:100%}
+h1{font-size:17px;margin:0 0 10px}h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mu);margin:16px 0 6px}
+label{display:flex;justify-content:space-between;gap:8px;margin-top:6px}
+input[type=range]{width:100%}input[type=number],select{width:100%;padding:5px;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:6px}
+button{padding:7px 10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:6px;cursor:pointer;font:inherit}
+button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weight:600}
+.r{display:flex;gap:6px;margin-top:8px}.r>button{flex:1}
+.row{display:flex;gap:6px;align-items:center;padding:4px 6px;border:1px solid var(--bd);border-radius:6px;margin-top:4px}
+.row.on{border-color:var(--ac)}.row span{flex:1;cursor:pointer;font-size:13px}
+.mu{color:var(--mu);font-size:12px}#log{white-space:pre-wrap;margin-top:12px}
+@media(max-width:760px){#app{flex-direction:column}#view{flex:1 1 50%;min-height:240px}#side{width:auto;max-height:50%;border-right:0;border-top:1px solid var(--bd);order:2}}
+</style></head><body>
+<div id="app"><div id="side">
+<h1>✂️ 3MF Splitter</h1>
+<input type="file" id="file" accept=".3mf">
+<div id="log" class="mu">Chọn file 3MF để bắt đầu.</div>
+<p class="mu">Click lên model để chọn vùng màu. Shift+click để thêm vùng khác.</p>
+<h2>Chọn vùng</h2>
+<label>Độ lệch màu <b id="v_tol">12</b></label><input type="range" id="tol" min="0" max="60" value="12">
+<label><span><input type="checkbox" id="adj" checked> Chỉ vùng liền kề</span></label>
+<label>Mở rộng / thu hẹp <b id="v_grow">0</b></label><input type="range" id="grow" min="-10" max="10" value="0">
+<label>Làm mượt biên <b id="v_smooth">2</b></label><input type="range" id="smooth" min="0" max="10" value="2">
+<p class="mu" id="cnt">Chưa chọn.</p>
+<div class="r"><button id="clr">Bỏ chọn</button><button id="cut" class="p">Cắt tách</button></div>
+<h2>Sửa &amp; giảm mặt</h2>
+<div class="r"><button id="fix">Fix model</button></div>
+<label>Giữ lại <b id="v_ratio">50</b>% tam giác</label><input type="range" id="ratio" min="5" max="95" value="50">
+<div class="r"><button id="simp">Simplify</button></div>
+<h2>Các phần</h2><div id="parts"></div>
+<h2>Xuất file</h2>
+<label>Chiều lớn nhất (mm, để trống = giữ nguyên)</label><input type="number" id="mm" min="1" placeholder="vd 80">
+<label>Màu</label><select id="cm"><option value="part">Mỗi phần 1 màu (cho slicer)</option><option value="tri">Màu từng tam giác</option></select>
+<div class="r"><button id="exp" class="p">Tải 3MF</button></div>
+
+</div><div id="view"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+<script>
+const $=id=>document.getElementById(id),log=s=>$('log').textContent=s;
+const view=$('view'),renderer=new THREE.WebGLRenderer({antialias:true}),scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(40,1,.1,1e5),group=new THREE.Group(),rc=new THREE.Raycaster();
+camera.up.set(0,0,1);scene.background=new THREE.Color(0x8a9099);view.appendChild(renderer.domElement);scene.add(group,camera,new THREE.HemisphereLight(0xffffff,0x777777,.95));
+const dl=new THREE.DirectionalLight(0xffffff,.55);dl.position.set(1,-1,2);camera.add(dl);
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+const mat=new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.DoubleSide});
+function rs(){const w=view.clientWidth,h=view.clientHeight;if(!w||!h)return;renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
+new ResizeObserver(rs).observe(view);rs();
+(function loop(){requestAnimationFrame(loop);renderer.render(scene,camera)})();
+let parts=[],active=null,cnt=0;
+
+/* ---------- 3MF parse (regex, nhanh cho file lớn) ---------- */
+const tick=()=>new Promise(r=>setTimeout(r,30));
+const I=[1,0,0,0,1,0,0,0,1,0,0,0],tr=s=>s?s.trim().split(/\s+/).map(Number):I;
+const cmp=(a,b)=>{const r=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++)r.push(a[i*3]*b[j]+a[i*3+1]*b[3+j]+a[i*3+2]*b[6+j]);for(let j=0;j<3;j++)r.push(a[9]*b[j]+a[10]*b[3+j]+a[11]*b[6+j]+b[9+j]);return r};
+const hx=s=>{s=s.replace('#','');return[0,2,4].map(i=>parseInt(s.substr(i,2),16)/255)};
+const attrs=s=>{const o={},re=/([\w:]+)="([^"]*)"/g;let a;while(a=re.exec(s))o[a[1]]=a[2];return o};
+async function load3mf(file){
+ log('Đang giải nén...');await tick();
+ const z=fflate.unzipSync(new Uint8Array(await file.arrayBuffer()));
+ const key=Object.keys(z).find(k=>/3dmodel\.model$/i.test(k));if(!key)throw new Error('Không tìm thấy 3dmodel.model');
+ const xml=fflate.strFromU8(z[key]);log('Đang phân tích '+(xml.length/1e6|0)+' MB XML...');await tick();
+ const tex={},res={},objs={},oV=[],oT=[],oC=[],G=[.7,.7,.7];let m;
+ const rx=/<(?:\w+:)?texture2d\s+([^>]*?)\/?>/g;
+ while(m=rx.exec(xml)){const a=attrs(m[1]),p=(a.path||'').replace(/^\//,''),k=Object.keys(z).find(x=>x.replace(/^\//,'')===p);if(!k)continue;
+  const img=new Image();img.src=URL.createObjectURL(new Blob([z[k]],{type:/png/i.test(p)?'image/png':'image/jpeg'}));await img.decode();
+  const c=document.createElement('canvas');c.width=img.width;c.height=img.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(img,0,0);
+  tex[a.id]={w:c.width,h:c.height,d:g.getImageData(0,0,c.width,c.height).data}}
+ const rb=/<(?:\w+:)?basematerials\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?basematerials>/g;
+ while(m=rb.exec(xml)){const c=[],r2=/displaycolor="([^"]*)"/g;let q;while(q=r2.exec(m[2]))c.push(hx(q[1]));res[attrs(m[1]).id]={t:'c',c}}
+ const rg=/<(?:\w+:)?colorgroup\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?colorgroup>/g;
+ while(m=rg.exec(xml)){const c=[],r2=/<(?:\w+:)?color\s+color="([^"]*)"/g;let q;while(q=r2.exec(m[2]))c.push(hx(q[1]));res[attrs(m[1]).id]={t:'c',c}}
+ const ru=/<(?:\w+:)?texture2dgroup\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?texture2dgroup>/g;
+ while(m=ru.exec(xml)){const uv=[],r2=/<(?:\w+:)?tex2coord\s+u="([^"]*)"\s+v="([^"]*)"/g;let q;while(q=r2.exec(m[2]))uv.push(+q[1],+q[2]);const a=attrs(m[1]);res[a.id]={t:'t',tex:tex[a.texid],uv}}
+ const ro=/<(?:\w+:)?object\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?object>/g;
+ while(m=ro.exec(xml)){const a=attrs(m[1]);objs[a.id]={a,body:m[2]}}
+ const tc=(r,a,b,c)=>{if(!r)return G;if(r.t==='c'){const x=r.c[a]||G,y=r.c[b]||x,w=r.c[c]||x;return[(x[0]+y[0]+w[0])/3,(x[1]+y[1]+w[1])/3,(x[2]+y[2]+w[2])/3]}
+  const T=r.tex,U=r.uv;if(!T)return G;let u=(U[2*a]+U[2*b]+U[2*c])/3,v=(U[2*a+1]+U[2*b+1]+U[2*c+1])/3;if(!(u===u&&v===v))return G;u-=Math.floor(u);v-=Math.floor(v);
+  const px=Math.min(T.w-1,u*T.w|0),py=Math.min(T.h-1,(1-v)*T.h|0),k=(py*T.w+px)*4;return[T.d[k]/255,T.d[k+1]/255,T.d[k+2]/255]};
+ function addMesh(o,M){const base=oV.length/3,opid=o.a.pid,opi=+(o.a.pindex||0),body=o.body;let q;
+  const rv=/<(?:\w+:)?vertex\s+x="([^"]*)"\s+y="([^"]*)"\s+z="([^"]*)"/g;
+  while(q=rv.exec(body)){const x=+q[1],y=+q[2],w=+q[3];oV.push(x*M[0]+y*M[3]+w*M[6]+M[9],x*M[1]+y*M[4]+w*M[7]+M[10],x*M[2]+y*M[5]+w*M[8]+M[11])}
+  const rt=/<(?:\w+:)?triangle\s+([^>]*?)\/?>/g,ar=/([\w:]+)="([^"]*)"/g;
+  while(q=rt.exec(body)){let a=0,b=0,c=0,pid=opid,i1=opi,i2=null,i3=null,w;ar.lastIndex=0;const s=q[1];
+   while(w=ar.exec(s)){switch(w[1]){case'v1':a=+w[2];break;case'v2':b=+w[2];break;case'v3':c=+w[2];break;case'pid':pid=w[2];break;case'p1':i1=+w[2];break;case'p2':i2=+w[2];break;case'p3':i3=+w[2]}}
+   if(i2===null)i2=i1;if(i3===null)i3=i1;oT.push(a+base,b+base,c+base);oC.push(...tc(res[pid],i1,i2,i3))}}
+ function walk(o,M){if(!o)return;if(/<(?:\w+:)?mesh[\s>]/.test(o.body)){addMesh(o,M);return}
+  const rc=/<(?:\w+:)?component\s+([^>]*?)\/?>/g;let q;while(q=rc.exec(o.body)){const a=attrs(q[1]);walk(objs[a.objectid],cmp(tr(a.transform),M))}}
+ const ri=/<(?:\w+:)?item\s+([^>]*?)\/?>/g;let any=false;
+ while(m=ri.exec(xml)){const a=attrs(m[1]);any=true;walk(objs[a.objectid],tr(a.transform))}
+ if(!any)for(const k in objs)walk(objs[k],I);
+ if(!oT.length)throw new Error('Không có mesh trong file (có thể mesh nằm ở file phụ trong zip)');
+ return{V:Float32Array.from(oV),T:Uint32Array.from(oT),C:Float32Array.from(oC),hasCol:Object.keys(res).length>0};
+}
+
+/* ---------- mesh utils ---------- */
+function weld(V,T){const n=V.length/3;let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];
+ for(let i=0;i<n;i++)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[3*i+d]);mx[d]=Math.max(mx[d],V[3*i+d])}
+ const q=Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2])*1e-6||1e-9;let sz=1;while(sz<2*n)sz<<=1;
+ const mk=sz-1,k1=new Int32Array(sz),k2=new Int32Array(sz),k3=new Int32Array(sz),vl=new Int32Array(sz).fill(-1),rm=new Uint32Array(n),nv=[];
+ for(let i=0;i<n;i++){const x=Math.round((V[3*i]-mn[0])/q),y=Math.round((V[3*i+1]-mn[1])/q),z=Math.round((V[3*i+2]-mn[2])/q);
+  let h=(Math.imul(x,73856093)^Math.imul(y,19349663)^Math.imul(z,83492791))&mk;
+  while(vl[h]>=0&&!(k1[h]===x&&k2[h]===y&&k3[h]===z))h=(h+1)&mk;
+  if(vl[h]<0){vl[h]=nv.length/3;k1[h]=x;k2[h]=y;k3[h]=z;nv.push(V[3*i],V[3*i+1],V[3*i+2])}rm[i]=vl[h]}
+ return{V:Float32Array.from(nv),T:Uint32Array.from(T,x=>rm[x])}}
+function sub(P,f){const m=P.T.length/3,rm=new Int32Array(P.V.length/3).fill(-1),V=[],T=[],C=[];
+ for(let t=0;t<m;t++){if(!f(t))continue;for(let k=0;k<3;k++){const o=P.T[3*t+k];let j=rm[o];if(j<0){j=rm[o]=V.length/3;V.push(P.V[3*o],P.V[3*o+1],P.V[3*o+2])}T.push(j)}C.push(P.C[3*t],P.C[3*t+1],P.C[3*t+2])}
+ return{V:Float32Array.from(V),T:Uint32Array.from(T),C:Float32Array.from(C)}}
+function adj(P){const m=P.T.length/3,T=P.T,nb=new Int32Array(3*m).fill(-1);let sz=1;while(sz<6*m)sz<<=1;
+ const ka=new Int32Array(sz).fill(-1),kb=new Int32Array(sz),val=new Int32Array(sz),mk=sz-1;
+ for(let t=0;t<m;t++)for(let e=0;e<3;e++){let a=T[3*t+e],b=T[3*t+(e+1)%3];if(a>b){const x=a;a=b;b=x}
+  let h=(Math.imul(a,73856093)^Math.imul(b,19349663))&mk;
+  while(ka[h]>=0&&!(ka[h]===a&&kb[h]===b))h=(h+1)&mk;
+  if(ka[h]<0){ka[h]=a;kb[h]=b;val[h]=3*t+e}else{const o=val[h];if(o>=0){nb[3*t+e]=o/3|0;nb[o]=t;val[h]=-1}}}
+ P.nb=nb}
+function dedupe(P){const m=P.T.length/3,T=P.T;let sz=1;while(sz<2*m)sz<<=1;
+ const mk=sz-1,k1=new Int32Array(sz),k2=new Int32Array(sz),k3=new Int32Array(sz),u=new Uint8Array(sz),keep=new Uint8Array(m);
+ for(let t=0;t<m;t++){let a=T[3*t],b=T[3*t+1],c=T[3*t+2],x;if(a===b||b===c||a===c)continue;
+  if(a>b){x=a;a=b;b=x}if(b>c){x=b;b=c;c=x}if(a>b){x=a;a=b;b=x}
+  let h=(Math.imul(a,73856093)^Math.imul(b,19349663)^Math.imul(c,83492791))&mk;
+  while(u[h]&&!(k1[h]===a&&k2[h]===b&&k3[h]===c))h=(h+1)&mk;
+  if(!u[h]){u[h]=1;k1[h]=a;k2[h]=b;k3[h]=c;keep[t]=1}}
+ Object.assign(P,sub(P,t=>keep[t]))}
+function cap(Q){adj(Q);const m=Q.T.length/3,out=new Map();
+ for(let t=0;t<m;t++)for(let e=0;e<3;e++)if(Q.nb[3*t+e]<0){const a=Q.T[3*t+e],b=Q.T[3*t+(e+1)%3];if(!out.has(a))out.set(a,[]);out.get(a).push(b)}
+ const V=Array.from(Q.V),T=Array.from(Q.T),C=Array.from(Q.C),ac=[0,0,0];let h=0;
+ for(let t=0;t<m;t++)for(let d=0;d<3;d++)ac[d]+=Q.C[3*t+d]/m;
+ for(const[s,l]of out)while(l.length){const lp=[s];let c=l.pop();
+  while(c!==s){lp.push(c);const nl=out.get(c);if(!nl||!nl.length){c=-1;break}c=nl.pop()}
+  if(c!==s||lp.length<3)continue;
+  const ci=V.length/3;let x=0,y=0,z=0;for(const v of lp){x+=V[3*v];y+=V[3*v+1];z+=V[3*v+2]}V.push(x/lp.length,y/lp.length,z/lp.length);
+  for(let i=0;i<lp.length;i++){T.push(lp[(i+1)%lp.length],lp[i],ci);C.push(ac[0],ac[1],ac[2])}h++}
+ Q.V=Float32Array.from(V);Q.T=Uint32Array.from(T);Q.C=Float32Array.from(C);return h}
+function orient(P){const m=P.T.length/3,T=P.T,nb=P.nb,V=P.V,cid=new Int32Array(m).fill(-1),vol=[];let n=0;
+ const flip=q=>{let x=T[3*q+1];T[3*q+1]=T[3*q+2];T[3*q+2]=x;x=nb[3*q];nb[3*q]=nb[3*q+2];nb[3*q+2]=x};
+ for(let s=0;s<m;s++){if(cid[s]>=0)continue;const st=[s];cid[s]=n;vol[n]=0;
+  while(st.length){const t=st.pop(),a0=T[3*t]*3,a1=T[3*t+1]*3,a2=T[3*t+2]*3;
+   vol[n]+=V[a0]*(V[a1+1]*V[a2+2]-V[a1+2]*V[a2+1])-V[a0+1]*(V[a1]*V[a2+2]-V[a1+2]*V[a2])+V[a0+2]*(V[a1]*V[a2+1]-V[a1+1]*V[a2]);
+   for(let e=0;e<3;e++){const q=nb[3*t+e];if(q<0||cid[q]>=0)continue;const a=T[3*t+e],b=T[3*t+(e+1)%3];
+    for(let k=0;k<3;k++)if(T[3*q+k]===a&&T[3*q+(k+1)%3]===b){flip(q);break}
+    cid[q]=n;st.push(q)}}n++}
+ for(let t=0;t<m;t++)if(vol[cid[t]]<0)flip(t);return n}
+function stats(P){adj(P);const m=P.T.length/3,seen=new Uint8Array(m);let c=0,open=0;
+ for(let i=0;i<P.nb.length;i++)if(P.nb[i]<0)open++;
+ for(let s=0;s<m;s++){if(seen[s])continue;c++;const st=[s];seen[s]=1;while(st.length){const t=st.pop();for(let e=0;e<3;e++){const q=P.nb[3*t+e];if(q>=0&&!seen[q]){seen[q]=1;st.push(q)}}}}
+ return{t:m,open,c}}
+function removeSmall(P){const m=P.T.length/3,id=new Int32Array(m).fill(-1),sz=[];
+ for(let s=0;s<m;s++){if(id[s]>=0)continue;const k=sz.length;sz.push(0);const st=[s];id[s]=k;while(st.length){const t=st.pop();sz[k]++;for(let e=0;e<3;e++){const q=P.nb[3*t+e];if(q>=0&&id[q]<0){id[q]=k;st.push(q)}}}}
+ const mx=Math.max(...sz);Object.assign(P,sub(P,t=>sz[id[t]]>=mx*.01))}
+
+/* ---------- display ---------- */
+function paint(P){const a=P.geo.attributes.color,A=a.array,m=P.C.length/3,s=P.sel;
+ for(let t=0;t<m;t++){let r=P.C[3*t],g=P.C[3*t+1],b=P.C[3*t+2];if(s&&s[t]){r=r*.4+.06;g=g*.4+.57;b=b*.4+.33}
+  for(let k=0;k<3;k++){A[t*9+k*3]=r;A[t*9+k*3+1]=g;A[t*9+k*3+2]=b}}a.needsUpdate=true}
+function buildGeo(P){const m=P.T.length/3,nv=P.V.length/3,V=P.V,T=P.T,N=new Float32Array(nv*3);
+ for(let t=0;t<m;t++){const a=T[3*t]*3,b=T[3*t+1]*3,c=T[3*t+2]*3,ux=V[b]-V[a],uy=V[b+1]-V[a+1],uz=V[b+2]-V[a+2],vx=V[c]-V[a],vy=V[c+1]-V[a+1],vz=V[c+2]-V[a+2],nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+  N[a]+=nx;N[a+1]+=ny;N[a+2]+=nz;N[b]+=nx;N[b+1]+=ny;N[b+2]+=nz;N[c]+=nx;N[c+1]+=ny;N[c+2]+=nz}
+ for(let i=0;i<nv;i++){const l=Math.hypot(N[3*i],N[3*i+1],N[3*i+2])||1;N[3*i]/=l;N[3*i+1]/=l;N[3*i+2]/=l}
+ const pos=new Float32Array(m*9),nor=new Float32Array(m*9);
+ for(let t=0;t<m;t++)for(let k=0;k<3;k++){const i=T[3*t+k]*3;for(let d=0;d<3;d++){pos[t*9+k*3+d]=V[i+d];nor[t*9+k*3+d]=N[i+d]}}
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));g.setAttribute('normal',new THREE.BufferAttribute(nor,3));g.setAttribute('color',new THREE.BufferAttribute(new Float32Array(m*9),3));
+ P.geo=g;P.base=new Uint8Array(m);P.sel=null;P.seed=null;adj(P);paint(P);return g}
+function addPart(P){P.mesh=new THREE.Mesh(buildGeo(P),mat);P.mesh.userData.P=P;group.add(P.mesh);parts.push(P)}
+function refresh(P){P.mesh.geometry.dispose();P.mesh.geometry=buildGeo(P);if(P===active)setActive(P,true);renderList()}
+function setActive(P,force){if(active&&active!==P){active.sel=null;paint(active)}active=P;if(P&&(force||!P.sel)){P.sel=new Uint8Array(P.T.length/3);P.base=new Uint8Array(P.T.length/3);paint(P)}count();renderList()}
+function removePart(P){group.remove(P.mesh);P.geo.dispose();parts=parts.filter(x=>x!==P);if(active===P)active=null;setActive(parts[0]||null)}
+function renderList(){const L=$('parts');L.innerHTML='';parts.forEach(P=>{const d=document.createElement('div');d.className='row'+(P===active?' on':'');
+ d.innerHTML='<input type="checkbox"><span></span><button>✕</button>';d.children[0].checked=P.mesh.visible;d.children[0].onchange=e=>P.mesh.visible=e.target.checked;
+ d.children[1].textContent=P.name+' · '+(P.T.length/3).toLocaleString()+' tam giác';d.children[1].onclick=()=>setActive(P);d.children[2].onclick=()=>removePart(P);L.appendChild(d)})}
+function count(){const P=active;if(!P||!P.sel){$('cnt').textContent='Chưa chọn.';return}let n=0;for(const v of P.sel)n+=v;$('cnt').textContent=n.toLocaleString()+' / '+(P.T.length/3).toLocaleString()+' tam giác được chọn'}
+
+/* ---------- selection ---------- */
+function flood(P,seed,tol,glob){const m=P.C.length/3,out=new Uint8Array(m),C=P.C,s=[C[3*seed],C[3*seed+1],C[3*seed+2]];
+ const ok=t=>Math.hypot(C[3*t]-s[0],C[3*t+1]-s[1],C[3*t+2]-s[2])<=tol;
+ if(glob){for(let t=0;t<m;t++)out[t]=ok(t)?1:0;return out}
+ const st=[seed];out[seed]=1;while(st.length){const t=st.pop();for(let e=0;e<3;e++){const n=P.nb[3*t+e];if(n>=0&&!out[n]&&ok(n)){out[n]=1;st.push(n)}}}return out}
+function refine(P){const m=P.base.length,g=+$('grow').value,sm=+$('smooth').value;let s=Uint8Array.from(P.base);
+ const step=(s,mode)=>{const o=Uint8Array.from(s);for(let t=0;t<m;t++){let c=0,n=0;for(let e=0;e<3;e++){const q=P.nb[3*t+e];if(q>=0){n++;c+=s[q]}}
+  if(mode>0){if(!s[t]&&c>0)o[t]=1}else if(mode<0){if(s[t]&&(c<n||n<3))o[t]=0}else{if(s[t]&&c<=1)o[t]=0;else if(!s[t]&&c>=2)o[t]=1}}return o};
+ for(let i=0;i<Math.abs(g);i++)s=step(s,Math.sign(g));for(let i=0;i<sm;i++)s=step(s,0);P.sel=s}
+function apply(){const P=active;if(!P)return;refine(P);paint(P);count()}
+function reflood(){const P=active;if(!P||P.seed==null)return;P.base=flood(P,P.seed,+$('tol').value/100,!$('adj').checked);apply()}
+let dn=null;const cv=renderer.domElement;
+cv.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
+cv.addEventListener('pointerup',e=>{if(!dn||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>4)return;
+ const r=cv.getBoundingClientRect();rc.setFromCamera(new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1),camera);
+ const h=rc.intersectObjects(parts.filter(p=>p.mesh.visible).map(p=>p.mesh),false)[0];if(!h)return;
+ const P=h.object.userData.P;if(P!==active)setActive(P);
+ const o=flood(P,h.faceIndex,+$('tol').value/100,!$('adj').checked);
+ if(e.shiftKey)for(let t=0;t<o.length;t++)P.base[t]|=o[t];else P.base=o;P.seed=h.faceIndex;apply()});
+
+/* ---------- actions ---------- */
+function fit(V){let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];for(let i=0;i<V.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[i+d]);mx[d]=Math.max(mx[d],V[i+d])}
+ const s=Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]);group.position.set(-(mn[0]+mx[0])/2,-(mn[1]+mx[1])/2,-(mn[2]+mx[2])/2);
+ camera.near=s/100;camera.far=s*100;camera.position.set(0,-s*2.2,s*.9);camera.updateProjectionMatrix();controls.target.set(0,0,0);controls.update()}
+$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;log('Đang đọc file (file lớn có thể mất vài chục giây)...');await tick();
+ try{const g=await load3mf(f);[...parts].forEach(removePart);const w=weld(g.V,g.T),P={name:'Mô hình',V:w.V,T:w.T,C:g.C};dedupe(P);fit(P.V);addPart(P);setActive(P);
+  {let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];for(let i=0;i<P.V.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],P.V[i+d]);mx[d]=Math.max(mx[d],P.V[i+d])}
+  let cm=[0,0,0];const mc=P.C.length/3;for(let t=0;t<mc;t++)for(let d=0;d<3;d++)cm[d]+=P.C[3*t+d]/mc;
+  log('Đã nạp '+P.T.length/3+' tam giác, '+P.V.length/3+' điểm.\nKích thước: '+[0,1,2].map(d=>(mx[d]-mn[d]).toPrecision(4)).join(' × ')+'\nMàu trung bình RGB: '+cm.map(x=>x.toFixed(2)).join(', ')+(P.T.length/3>4e5?'\nModel rất nặng: nên Simplify xuống khoảng 200k trước khi chọn vùng.':'')+(g.hasCol?'':'\nKhông thấy dữ liệu màu, model hiện màu xám.'))}}catch(err){log('Lỗi: '+err.message)}};
+for(const id of ['tol','grow','smooth','ratio'])$(id).oninput=()=>{$('v_'+id).textContent=$(id).value;if(id==='tol')reflood();else if(id!=='ratio')apply()};
+$('adj').onchange=reflood;
+$('clr').onclick=()=>{if(!active)return;active.base.fill(0);active.seed=null;apply()};
+$('cut').onclick=()=>{const P=active;if(!P||!P.sel)return;let n=0;for(const v of P.sel)n+=v;if(!n||n===P.sel.length){log('Hãy chọn một phần của model (không phải rỗng hoặc toàn bộ).');return}
+ log('Đang cắt...');setTimeout(()=>{const A=sub(P,t=>P.sel[t]===1),B=sub(P,t=>!P.sel[t]),ha=cap(A),hb=cap(B);cnt++;
+  removePart(P);A.name='Phần tách '+cnt;B.name='Phần còn lại '+cnt;addPart(A);addPart(B);setActive(B);log('Đã tách. Bịt '+ha+' lỗ ở phần tách, '+hb+' lỗ ở phần còn lại.')},30)};
+$('fix').onclick=()=>{const P=active;if(!P)return;log('Đang fix...');setTimeout(()=>{const s0=stats(P);dedupe(P);adj(P);removeSmall(P);adj(P);orient(P);const h=cap(P);adj(P);orient(P);refresh(P);const s1=stats(P);
+ log('Trước: '+s0.t+' tam giác, '+s0.open+' cạnh hở, '+s0.c+' mảnh.\nSau: '+s1.t+' tam giác, '+s1.open+' cạnh hở, '+s1.c+' mảnh. Bịt '+h+' lỗ.')},30)};
+$('simp').onclick=()=>{const P=active;if(!P)return;log('Đang simplify...');setTimeout(()=>{
+ const V=P.V,T=P.T,nv=V.length/3,m=T.length/3,target=m*$('ratio').value/100;let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];
+ for(let i=0;i<nv;i++)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[3*i+d]);mx[d]=Math.max(mx[d],V[3*i+d])}
+ const size=Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]);
+ const clus=h=>{const mp=new Map(),id=new Int32Array(nv);let k=0;for(let i=0;i<nv;i++){const key=(Math.floor((V[3*i]-mn[0])/h)*2048+Math.floor((V[3*i+1]-mn[1])/h))*2048+Math.floor((V[3*i+2]-mn[2])/h);let j=mp.get(key);if(j===undefined){j=k++;mp.set(key,j)}id[i]=j}return{id,k}};
+ const count=h=>{const{id}=clus(h);let c=0;for(let t=0;t<m;t++){const a=id[T[3*t]],b=id[T[3*t+1]],d=id[T[3*t+2]];if(a!==b&&b!==d&&a!==d)c++}return c};
+ let lo=size/2000,hi=size/2;for(let i=0;i<14;i++){const mid=(lo+hi)/2;if(count(mid)>target)lo=mid;else hi=mid}
+ const{id,k}=clus(hi),S=new Float64Array(k*3),N=new Int32Array(k);
+ for(let i=0;i<nv;i++){const j=id[i];S[3*j]+=V[3*i];S[3*j+1]+=V[3*i+1];S[3*j+2]+=V[3*i+2];N[j]++}
+ const nV=new Float32Array(k*3);for(let j=0;j<k;j++)for(let d=0;d<3;d++)nV[3*j+d]=S[3*j+d]/N[j];
+ const nT=[],nC=[];for(let t=0;t<m;t++){const a=id[T[3*t]],b=id[T[3*t+1]],d=id[T[3*t+2]];if(a!==b&&b!==d&&a!==d){nT.push(a,b,d);nC.push(P.C[3*t],P.C[3*t+1],P.C[3*t+2])}}
+ Object.assign(P,{V:nV,T:Uint32Array.from(nT),C:Float32Array.from(nC)});dedupe(P);refresh(P);log('Simplify: '+m+' → '+P.T.length/3+' tam giác. Nên bấm Fix model sau đó.')},30)};
+$('exp').onclick=async()=>{log('Đang tạo file...');await tick();
+ const vis=parts.filter(p=>p.mesh.visible);if(!vis.length)return;let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];
+ for(const P of vis)for(let i=0;i<P.V.length;i+=3)for(let k=0;k<3;k++){mn[k]=Math.min(mn[k],P.V[i+k]);mx[k]=Math.max(mx[k],P.V[i+k])}
+ const mmv=+$('mm').value,s=mmv>0?mmv/Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]):1,per=$('cm').value==='part',H=c=>c.map(x=>Math.round(x*255).toString(16).padStart(2,'0')).join('');
+ let res='',obj='',items='';
+ vis.forEach((P,i)=>{const rid=2*i+1,oid=2*i+2,m=P.T.length/3,vx=[],tx=[],nm='Part '+(i+1);
+  for(let j=0;j<P.V.length;j+=3)vx.push('<vertex x="'+(P.V[j]*s).toFixed(4)+'" y="'+(P.V[j+1]*s).toFixed(4)+'" z="'+(P.V[j+2]*s).toFixed(4)+'"/>');
+  if(per){const a=[0,0,0];for(let t=0;t<m;t++)for(let k=0;k<3;k++)a[k]+=P.C[3*t+k]/m;res+='<basematerials id="'+rid+'"><base name="'+nm+'" displaycolor="#'+H(a)+'"/></basematerials>';
+   for(let t=0;t<m;t++)tx.push('<triangle v1="'+P.T[3*t]+'" v2="'+P.T[3*t+1]+'" v3="'+P.T[3*t+2]+'"/>');
+   obj+='<object id="'+oid+'" type="model" name="'+nm+'" pid="'+rid+'" pindex="0"><mesh><vertices>'+vx.join('')+'</vertices><triangles>'+tx.join('')+'</triangles></mesh></object>'}
+  else{const cs=[];for(let t=0;t<m;t++){cs.push('<m:color color="#'+H([P.C[3*t],P.C[3*t+1],P.C[3*t+2]])+'"/>');tx.push('<triangle v1="'+P.T[3*t]+'" v2="'+P.T[3*t+1]+'" v3="'+P.T[3*t+2]+'" pid="'+rid+'" p1="'+t+'" p2="'+t+'" p3="'+t+'"/>')}
+   res+='<m:colorgroup id="'+rid+'">'+cs.join('')+'</m:colorgroup>';obj+='<object id="'+oid+'" type="model" name="'+nm+'"><mesh><vertices>'+vx.join('')+'</vertices><triangles>'+tx.join('')+'</triangles></mesh></object>'}
+  items+='<item objectid="'+oid+'"/>'});
+ const model='<?xml version="1.0" encoding="UTF-8"?><model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02"><resources>'+res+obj+'</resources><build>'+items+'</build></model>';
+ const z=fflate.zipSync({'[Content_Types].xml':fflate.strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>'),
+  '_rels/.rels':fflate.strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>'),
+  '3D/3dmodel.model':fflate.strToU8(model)},{level:6});
+ const u=URL.createObjectURL(new Blob([z],{type:'model/3mf'})),l=document.createElement('a');l.href=u;l.download='model.3mf';document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),6e4);log('Đã xuất '+vis.length+' phần.')};
+</script></body></html>
