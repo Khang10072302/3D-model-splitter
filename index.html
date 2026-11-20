@@ -19,6 +19,7 @@ button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weigh
 .row{display:flex;gap:6px;align-items:center;padding:4px 6px;border:1px solid var(--bd);border-radius:6px;margin-top:4px}
 .row.on{border-color:var(--ac)}.row span{flex:1;cursor:pointer;font-size:13px}
 .mu{color:var(--mu);font-size:12px}#log{white-space:pre-wrap;margin-top:12px}
+#busy{display:none;position:absolute;inset:0;background:rgba(0,0,0,.45);align-items:center;justify-content:center;z-index:5}#busy>div{background:var(--pn);padding:18px 22px;border-radius:10px;text-align:center;min-width:240px;max-width:80%}.sp{width:30px;height:30px;margin:0 auto 10px;border:4px solid var(--bd);border-top-color:var(--ac);border-radius:50%;animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}#bar{height:6px;background:var(--bd);border-radius:3px;margin:10px 0 6px;overflow:hidden}#bar i{display:block;height:100%;width:0;background:var(--ac)}
 @media(max-width:760px){#app{flex-direction:column}#view{flex:1 1 50%;min-height:240px}#side{width:auto;max-height:50%;border-right:0;border-top:1px solid var(--bd);order:2}}
 </style></head><body>
 <div id="app"><div id="side">
@@ -43,12 +44,17 @@ button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weigh
 <label>Màu</label><select id="cm"><option value="part">Mỗi phần 1 màu (cho slicer)</option><option value="tri">Màu từng tam giác</option></select>
 <div class="r"><button id="exp" class="p">Tải 3MF</button></div>
 
-</div><div id="view"></div></div>
+</div><div id="view"><div id="busy"><div><div class="sp"></div><b id="bmsg"></b><div id="bar"><i></i></div><div class="mu" id="bt"></div></div></div></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
 <script>
-const $=id=>document.getElementById(id),log=s=>$('log').textContent=s;
+const $=id=>document.getElementById(id),log=s=>{$('log').textContent=s;if(bOn)$('bmsg').textContent=s.split('\n')[0]};
+let bOn=false,bT0=0,bTm=null;
+function busy(m,p){const b=$('busy');if(!m){bOn=false;b.style.display='none';clearInterval(bTm);return}
+ if(!bOn){bOn=true;bT0=Date.now();b.style.display='flex';$('bt').textContent='0 giây';bTm=setInterval(()=>$('bt').textContent=((Date.now()-bT0)/1000|0)+' giây',500)}
+ $('bmsg').textContent=m;const i=$('bar').firstChild;i.style.width=p==null?'100%':p+'%';i.style.opacity=p==null?.35:1}
+addEventListener('error',()=>busy(false));addEventListener('unhandledrejection',()=>busy(false));
 const view=$('view'),renderer=new THREE.WebGLRenderer({antialias:true}),scene=new THREE.Scene(),camera=new THREE.PerspectiveCamera(40,1,.1,1e5),group=new THREE.Group(),rc=new THREE.Raycaster();
 camera.up.set(0,0,1);scene.background=new THREE.Color(0x8a9099);view.appendChild(renderer.domElement);scene.add(group,camera,new THREE.HemisphereLight(0xffffff,0x777777,.95));
 const dl=new THREE.DirectionalLight(0xffffff,.55);dl.position.set(1,-1,2);camera.add(dl);
@@ -61,13 +67,14 @@ let parts=[],active=null,cnt=0;
 
 /* ---------- 3MF parse (regex, nhanh cho file lớn) ---------- */
 const tick=()=>new Promise(r=>setTimeout(r,30));
+const readFile=f=>new Promise((ok,no)=>{const r=new FileReader();r.onprogress=e=>{if(e.lengthComputable)busy('Đang tải file lên... '+(e.loaded/e.total*100|0)+'%',e.loaded/e.total*100)};r.onload=()=>ok(r.result);r.onerror=()=>no(new Error('Không đọc được file'));r.readAsArrayBuffer(f)});
 const I=[1,0,0,0,1,0,0,0,1,0,0,0],tr=s=>s?s.trim().split(/\s+/).map(Number):I;
 const cmp=(a,b)=>{const r=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++)r.push(a[i*3]*b[j]+a[i*3+1]*b[3+j]+a[i*3+2]*b[6+j]);for(let j=0;j<3;j++)r.push(a[9]*b[j]+a[10]*b[3+j]+a[11]*b[6+j]+b[9+j]);return r};
 const hx=s=>{s=s.replace('#','');return[0,2,4].map(i=>parseInt(s.substr(i,2),16)/255)};
 const attrs=s=>{const o={},re=/([\w:]+)="([^"]*)"/g;let a;while(a=re.exec(s))o[a[1]]=a[2];return o};
 async function load3mf(file){
  log('Đang giải nén...');await tick();
- const z=fflate.unzipSync(new Uint8Array(await file.arrayBuffer()));
+ const z=fflate.unzipSync(new Uint8Array(await readFile(file)));
  const key=Object.keys(z).find(k=>/3dmodel\.model$/i.test(k));if(!key)throw new Error('Không tìm thấy 3dmodel.model');
  const xml=fflate.strFromU8(z[key]);log('Đang phân tích '+(xml.length/1e6|0)+' MB XML...');await tick();
  const tex={},res={},objs={},oV=[],oT=[],oC=[],G=[.7,.7,.7];let m;
@@ -203,20 +210,20 @@ cv.addEventListener('pointerup',e=>{if(!dn||Math.hypot(e.clientX-dn[0],e.clientY
 function fit(V){let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];for(let i=0;i<V.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[i+d]);mx[d]=Math.max(mx[d],V[i+d])}
  const s=Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]);group.position.set(-(mn[0]+mx[0])/2,-(mn[1]+mx[1])/2,-(mn[2]+mx[2])/2);
  camera.near=s/100;camera.far=s*100;camera.position.set(0,-s*2.2,s*.9);camera.updateProjectionMatrix();controls.target.set(0,0,0);controls.update()}
-$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;log('Đang đọc file (file lớn có thể mất vài chục giây)...');await tick();
- try{const g=await load3mf(f);[...parts].forEach(removePart);const w=weld(g.V,g.T),P={name:'Mô hình',V:w.V,T:w.T,C:g.C};dedupe(P);fit(P.V);addPart(P);setActive(P);
+$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;busy('Đang tải file lên...',0);await tick();
+ try{const g=await load3mf(f);log('Đang xử lý mô hình (hàn đỉnh, dựng lưới)...');await tick();[...parts].forEach(removePart);const w=weld(g.V,g.T),P={name:'Mô hình',V:w.V,T:w.T,C:g.C};dedupe(P);fit(P.V);addPart(P);setActive(P);
   {let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];for(let i=0;i<P.V.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],P.V[i+d]);mx[d]=Math.max(mx[d],P.V[i+d])}
   let cm=[0,0,0];const mc=P.C.length/3;for(let t=0;t<mc;t++)for(let d=0;d<3;d++)cm[d]+=P.C[3*t+d]/mc;
-  log('Đã nạp '+P.T.length/3+' tam giác, '+P.V.length/3+' điểm.\nKích thước: '+[0,1,2].map(d=>(mx[d]-mn[d]).toPrecision(4)).join(' × ')+'\nMàu trung bình RGB: '+cm.map(x=>x.toFixed(2)).join(', ')+(P.T.length/3>4e5?'\nModel rất nặng: nên Simplify xuống khoảng 200k trước khi chọn vùng.':'')+(g.hasCol?'':'\nKhông thấy dữ liệu màu, model hiện màu xám.'))}}catch(err){log('Lỗi: '+err.message)}};
+  log('Đã nạp '+P.T.length/3+' tam giác, '+P.V.length/3+' điểm.\nKích thước: '+[0,1,2].map(d=>(mx[d]-mn[d]).toPrecision(4)).join(' × ')+'\nMàu trung bình RGB: '+cm.map(x=>x.toFixed(2)).join(', ')+(P.T.length/3>4e5?'\nModel rất nặng: nên Simplify xuống khoảng 200k trước khi chọn vùng.':'')+(g.hasCol?'':'\nKhông thấy dữ liệu màu, model hiện màu xám.'))}}catch(err){log('Lỗi: '+err.message)}busy(false)};
 for(const id of ['tol','grow','smooth','ratio'])$(id).oninput=()=>{$('v_'+id).textContent=$(id).value;if(id==='tol')reflood();else if(id!=='ratio')apply()};
 $('adj').onchange=reflood;
 $('clr').onclick=()=>{if(!active)return;active.base.fill(0);active.seed=null;apply()};
 $('cut').onclick=()=>{const P=active;if(!P||!P.sel)return;let n=0;for(const v of P.sel)n+=v;if(!n||n===P.sel.length){log('Hãy chọn một phần của model (không phải rỗng hoặc toàn bộ).');return}
- log('Đang cắt...');setTimeout(()=>{const A=sub(P,t=>P.sel[t]===1),B=sub(P,t=>!P.sel[t]),ha=cap(A),hb=cap(B);cnt++;
-  removePart(P);A.name='Phần tách '+cnt;B.name='Phần còn lại '+cnt;addPart(A);addPart(B);setActive(B);log('Đã tách. Bịt '+ha+' lỗ ở phần tách, '+hb+' lỗ ở phần còn lại.')},30)};
-$('fix').onclick=()=>{const P=active;if(!P)return;log('Đang fix...');setTimeout(()=>{const s0=stats(P);dedupe(P);adj(P);removeSmall(P);adj(P);orient(P);const h=cap(P);adj(P);orient(P);refresh(P);const s1=stats(P);
- log('Trước: '+s0.t+' tam giác, '+s0.open+' cạnh hở, '+s0.c+' mảnh.\nSau: '+s1.t+' tam giác, '+s1.open+' cạnh hở, '+s1.c+' mảnh. Bịt '+h+' lỗ.')},30)};
-$('simp').onclick=()=>{const P=active;if(!P)return;log('Đang simplify...');setTimeout(()=>{
+ busy('Đang cắt...');setTimeout(()=>{const A=sub(P,t=>P.sel[t]===1),B=sub(P,t=>!P.sel[t]),ha=cap(A),hb=cap(B);cnt++;
+  removePart(P);A.name='Phần tách '+cnt;B.name='Phần còn lại '+cnt;addPart(A);addPart(B);setActive(B);log('Đã tách. Bịt '+ha+' lỗ ở phần tách, '+hb+' lỗ ở phần còn lại.');busy(false)},30)};
+$('fix').onclick=()=>{const P=active;if(!P)return;busy('Đang fix model...');setTimeout(()=>{const s0=stats(P);dedupe(P);adj(P);removeSmall(P);adj(P);orient(P);const h=cap(P);adj(P);orient(P);refresh(P);const s1=stats(P);
+ log('Trước: '+s0.t+' tam giác, '+s0.open+' cạnh hở, '+s0.c+' mảnh.\nSau: '+s1.t+' tam giác, '+s1.open+' cạnh hở, '+s1.c+' mảnh. Bịt '+h+' lỗ.');busy(false)},30)};
+$('simp').onclick=()=>{const P=active;if(!P)return;busy('Đang simplify...');setTimeout(()=>{
  const V=P.V,T=P.T,nv=V.length/3,m=T.length/3,target=m*$('ratio').value/100;let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];
  for(let i=0;i<nv;i++)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[3*i+d]);mx[d]=Math.max(mx[d],V[3*i+d])}
  const size=Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]);
@@ -227,9 +234,9 @@ $('simp').onclick=()=>{const P=active;if(!P)return;log('Đang simplify...');setT
  for(let i=0;i<nv;i++){const j=id[i];S[3*j]+=V[3*i];S[3*j+1]+=V[3*i+1];S[3*j+2]+=V[3*i+2];N[j]++}
  const nV=new Float32Array(k*3);for(let j=0;j<k;j++)for(let d=0;d<3;d++)nV[3*j+d]=S[3*j+d]/N[j];
  const nT=[],nC=[];for(let t=0;t<m;t++){const a=id[T[3*t]],b=id[T[3*t+1]],d=id[T[3*t+2]];if(a!==b&&b!==d&&a!==d){nT.push(a,b,d);nC.push(P.C[3*t],P.C[3*t+1],P.C[3*t+2])}}
- Object.assign(P,{V:nV,T:Uint32Array.from(nT),C:Float32Array.from(nC)});dedupe(P);refresh(P);log('Simplify: '+m+' → '+P.T.length/3+' tam giác. Nên bấm Fix model sau đó.')},30)};
-$('exp').onclick=async()=>{log('Đang tạo file...');await tick();
- const vis=parts.filter(p=>p.mesh.visible);if(!vis.length)return;let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];
+ Object.assign(P,{V:nV,T:Uint32Array.from(nT),C:Float32Array.from(nC)});dedupe(P);refresh(P);log('Simplify: '+m+' → '+P.T.length/3+' tam giác. Nên bấm Fix model sau đó.');busy(false)},30)};
+$('exp').onclick=async()=>{busy('Đang tạo file 3MF...');await tick();
+ const vis=parts.filter(p=>p.mesh.visible);if(!vis.length){busy(false);return}let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];
  for(const P of vis)for(let i=0;i<P.V.length;i+=3)for(let k=0;k<3;k++){mn[k]=Math.min(mn[k],P.V[i+k]);mx[k]=Math.max(mx[k],P.V[i+k])}
  const mmv=+$('mm').value,s=mmv>0?mmv/Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]):1,per=$('cm').value==='part',H=c=>c.map(x=>Math.round(x*255).toString(16).padStart(2,'0')).join('');
  let res='',obj='',items='';
@@ -245,5 +252,5 @@ $('exp').onclick=async()=>{log('Đang tạo file...');await tick();
  const z=fflate.zipSync({'[Content_Types].xml':fflate.strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>'),
   '_rels/.rels':fflate.strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>'),
   '3D/3dmodel.model':fflate.strToU8(model)},{level:6});
- const u=URL.createObjectURL(new Blob([z],{type:'model/3mf'})),l=document.createElement('a');l.href=u;l.download='model.3mf';document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),6e4);log('Đã xuất '+vis.length+' phần.')};
+ const u=URL.createObjectURL(new Blob([z],{type:'model/3mf'})),l=document.createElement('a');l.href=u;l.download='model.3mf';document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),6e4);log('Đã xuất '+vis.length+' phần.');busy(false)};
 </script></body></html>
