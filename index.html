@@ -75,39 +75,48 @@ const attrs=s=>{const o={},re=/([\w:]+)="([^"]*)"/g;let a;while(a=re.exec(s))o[a
 async function load3mf(file){
  log('Đang giải nén...');await tick();
  const z=fflate.unzipSync(new Uint8Array(await readFile(file)));
- const key=Object.keys(z).find(k=>/3dmodel\.model$/i.test(k));if(!key)throw new Error('Không tìm thấy 3dmodel.model');
- const xml=fflate.strFromU8(z[key]);log('Đang phân tích '+(xml.length/1e6|0)+' MB XML...');await tick();
- const tex={},res={},objs={},oV=[],oT=[],oC=[],G=[.7,.7,.7];let m;
- const rx=/<(?:\w+:)?texture2d\s+([^>]*?)\/?>/g;
- while(m=rx.exec(xml)){const a=attrs(m[1]),p=(a.path||'').replace(/^\//,''),k=Object.keys(z).find(x=>x.replace(/^\//,'')===p);if(!k)continue;
-  const img=new Image();img.src=URL.createObjectURL(new Blob([z[k]],{type:/png/i.test(p)?'image/png':'image/jpeg'}));await img.decode();
-  const c=document.createElement('canvas');c.width=img.width;c.height=img.height;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(img,0,0);
-  tex[a.id]={w:c.width,h:c.height,d:g.getImageData(0,0,c.width,c.height).data}}
- const rb=/<(?:\w+:)?basematerials\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?basematerials>/g;
- while(m=rb.exec(xml)){const c=[],r2=/displaycolor="([^"]*)"/g;let q;while(q=r2.exec(m[2]))c.push(hx(q[1]));res[attrs(m[1]).id]={t:'c',c}}
- const rg=/<(?:\w+:)?colorgroup\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?colorgroup>/g;
- while(m=rg.exec(xml)){const c=[],r2=/<(?:\w+:)?color\s+color="([^"]*)"/g;let q;while(q=r2.exec(m[2]))c.push(hx(q[1]));res[attrs(m[1]).id]={t:'c',c}}
- const ru=/<(?:\w+:)?texture2dgroup\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?texture2dgroup>/g;
- while(m=ru.exec(xml)){const uv=[],r2=/<(?:\w+:)?tex2coord\s+u="([^"]*)"\s+v="([^"]*)"/g;let q;while(q=r2.exec(m[2]))uv.push(+q[1],+q[2]);const a=attrs(m[1]);res[a.id]={t:'t',tex:tex[a.texid],uv}}
- const ro=/<(?:\w+:)?object\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?object>/g;
- while(m=ro.exec(xml)){const a=attrs(m[1]);objs[a.id]={a,body:m[2]}}
+ const names=Object.keys(z),norm=p=>p.replace(/^\//,'').toLowerCase(),models=names.filter(k=>/\.model$/i.test(k));
+ if(!models.length)throw new Error('Không thấy file .model. Trong zip có: '+names.join(', '));
+ const mainKey=models.find(k=>/3dmodel\.model$/i.test(k))||models[0],ctx={},oV=[],oT=[],oC=[],G=[.7,.7,.7];
+ async function parseModel(k){const xml=fflate.strFromU8(z[k]);log('Đang phân tích '+k+' ('+(xml.length/1e6|0)+' MB)...');await tick();
+  const c={xml,tex:{},res:{},objs:{}};ctx[norm(k)]=c;let m;
+  const rx=/<(?:\w+:)?texture2d\s+([^>]*?)\/?>/g;
+  while(m=rx.exec(xml)){const a=attrs(m[1]),p=norm(a.path||''),kk=names.find(x=>norm(x)===p);if(!kk)continue;
+   const img=new Image();img.src=URL.createObjectURL(new Blob([z[kk]],{type:/png/i.test(p)?'image/png':'image/jpeg'}));await img.decode();
+   const cv2=document.createElement('canvas');cv2.width=img.width;cv2.height=img.height;const g=cv2.getContext('2d',{willReadFrequently:true});g.drawImage(img,0,0);
+   c.tex[a.id]={w:cv2.width,h:cv2.height,d:g.getImageData(0,0,cv2.width,cv2.height).data}}
+  const rb=/<(?:\w+:)?basematerials\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?basematerials>/g;
+  while(m=rb.exec(xml)){const cl=[],r2=/displaycolor="([^"]*)"/g;let q;while(q=r2.exec(m[2]))cl.push(hx(q[1]));c.res[attrs(m[1]).id]={t:'c',c:cl}}
+  const rg=/<(?:\w+:)?colorgroup\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?colorgroup>/g;
+  while(m=rg.exec(xml)){const cl=[],r2=/<(?:\w+:)?color\s+color="([^"]*)"/g;let q;while(q=r2.exec(m[2]))cl.push(hx(q[1]));c.res[attrs(m[1]).id]={t:'c',c:cl}}
+  const ru=/<(?:\w+:)?texture2dgroup\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?texture2dgroup>/g;
+  while(m=ru.exec(xml)){const uv=[],r2=/<(?:\w+:)?tex2coord\s+u="([^"]*)"\s+v="([^"]*)"/g;let q;while(q=r2.exec(m[2]))uv.push(+q[1],+q[2]);const a=attrs(m[1]);c.res[a.id]={t:'t',tex:c.tex[a.texid],uv}}
+  const ro=/<(?:\w+:)?object\s+([^>]*)>([\s\S]*?)<\/(?:\w+:)?object>/g;
+  while(m=ro.exec(xml)){const a=attrs(m[1]);c.objs[a.id]={a,body:m[2]}}}
+ for(const k of models)await parseModel(k);
+ const main=ctx[norm(mainKey)],hasCol=Object.values(ctx).some(c=>Object.keys(c.res).length>0);
  const tc=(r,a,b,c)=>{if(!r)return G;if(r.t==='c'){const x=r.c[a]||G,y=r.c[b]||x,w=r.c[c]||x;return[(x[0]+y[0]+w[0])/3,(x[1]+y[1]+w[1])/3,(x[2]+y[2]+w[2])/3]}
   const T=r.tex,U=r.uv;if(!T)return G;let u=(U[2*a]+U[2*b]+U[2*c])/3,v=(U[2*a+1]+U[2*b+1]+U[2*c+1])/3;if(!(u===u&&v===v))return G;u-=Math.floor(u);v-=Math.floor(v);
   const px=Math.min(T.w-1,u*T.w|0),py=Math.min(T.h-1,(1-v)*T.h|0),k=(py*T.w+px)*4;return[T.d[k]/255,T.d[k+1]/255,T.d[k+2]/255]};
- function addMesh(o,M){const base=oV.length/3,opid=o.a.pid,opi=+(o.a.pindex||0),body=o.body;let q;
+ function addMesh(o,M,c){const base=oV.length/3,opid=o.a.pid,opi=+(o.a.pindex||0),body=o.body;let q;
+  const pv=(x,y,w)=>oV.push(x*M[0]+y*M[3]+w*M[6]+M[9],x*M[1]+y*M[4]+w*M[7]+M[10],x*M[2]+y*M[5]+w*M[8]+M[11]);
   const rv=/<(?:\w+:)?vertex\s+x="([^"]*)"\s+y="([^"]*)"\s+z="([^"]*)"/g;
-  while(q=rv.exec(body)){const x=+q[1],y=+q[2],w=+q[3];oV.push(x*M[0]+y*M[3]+w*M[6]+M[9],x*M[1]+y*M[4]+w*M[7]+M[10],x*M[2]+y*M[5]+w*M[8]+M[11])}
+  while(q=rv.exec(body))pv(+q[1],+q[2],+q[3]);
+  if(oV.length===base*3){const rg=/<(?:\w+:)?vertex\s+([^>]*?)\/?>/g;while(q=rg.exec(body)){const a=attrs(q[1]);pv(+a.x,+a.y,+a.z)}}
   const rt=/<(?:\w+:)?triangle\s+([^>]*?)\/?>/g,ar=/([\w:]+)="([^"]*)"/g;
-  while(q=rt.exec(body)){let a=0,b=0,c=0,pid=opid,i1=opi,i2=null,i3=null,w;ar.lastIndex=0;const s=q[1];
-   while(w=ar.exec(s)){switch(w[1]){case'v1':a=+w[2];break;case'v2':b=+w[2];break;case'v3':c=+w[2];break;case'pid':pid=w[2];break;case'p1':i1=+w[2];break;case'p2':i2=+w[2];break;case'p3':i3=+w[2]}}
-   if(i2===null)i2=i1;if(i3===null)i3=i1;oT.push(a+base,b+base,c+base);oC.push(...tc(res[pid],i1,i2,i3))}}
- function walk(o,M){if(!o)return;if(/<(?:\w+:)?mesh[\s>]/.test(o.body)){addMesh(o,M);return}
-  const rc=/<(?:\w+:)?component\s+([^>]*?)\/?>/g;let q;while(q=rc.exec(o.body)){const a=attrs(q[1]);walk(objs[a.objectid],cmp(tr(a.transform),M))}}
- const ri=/<(?:\w+:)?item\s+([^>]*?)\/?>/g;let any=false;
- while(m=ri.exec(xml)){const a=attrs(m[1]);any=true;walk(objs[a.objectid],tr(a.transform))}
- if(!any)for(const k in objs)walk(objs[k],I);
- if(!oT.length)throw new Error('Không có mesh trong file (có thể mesh nằm ở file phụ trong zip)');
- return{V:Float32Array.from(oV),T:Uint32Array.from(oT),C:Float32Array.from(oC),hasCol:Object.keys(res).length>0};
+  while(q=rt.exec(body)){let a=0,b=0,cc=0,pid=opid,i1=opi,i2=null,i3=null,w;ar.lastIndex=0;const s=q[1];
+   while(w=ar.exec(s)){switch(w[1]){case'v1':a=+w[2];break;case'v2':b=+w[2];break;case'v3':cc=+w[2];break;case'pid':pid=w[2];break;case'p1':i1=+w[2];break;case'p2':i2=+w[2];break;case'p3':i3=+w[2]}}
+   if(i2===null)i2=i1;if(i3===null)i3=i1;oT.push(a+base,b+base,cc+base);oC.push(...tc(c.res[pid]||main.res[pid],i1,i2,i3))}}
+ const hasMesh=o=>/<(?:\w+:)?mesh[\s>]/.test(o.body);
+ function walk(o,M,c){if(!o)return;if(hasMesh(o)){addMesh(o,M,c);return}
+  const rc=/<(?:\w+:)?component\s+([^>]*?)\/?>/g;let q;
+  while(q=rc.exec(o.body)){const a=attrs(q[1]),p=a['p:path']||a.path,c2=p?ctx[norm(p)]:c;if(!c2)continue;walk(c2.objs[a.objectid],cmp(tr(a.transform),M),c2)}}
+ const ri=/<(?:\w+:)?item\s+([^>]*?)\/?>/g;let m,nItems=0;
+ while(m=ri.exec(main.xml)){const a=attrs(m[1]),p=a['p:path'],c2=p?ctx[norm(p)]:main;nItems++;if(c2)walk(c2.objs[a.objectid],tr(a.transform),c2)}
+ if(!oT.length)for(const c of Object.values(ctx))for(const k in c.objs)if(hasMesh(c.objs[k]))addMesh(c.objs[k],I,c);
+ if(!oT.length){const cn=re=>Object.values(ctx).reduce((n,c)=>n+(c.xml.match(re)||[]).length,0),i=main.xml.indexOf('<resources');
+  throw new Error('Không có mesh trong file.\nDebug: file='+names.map(k=>k+' ('+z[k].length+')').join(', ')+'\nobject='+cn(/<(?:\w+:)?object[\s>]/g)+', vertex='+cn(/<(?:\w+:)?vertex[\s>]/g)+', triangle='+cn(/<(?:\w+:)?triangle[\s>]/g)+', component='+cn(/<(?:\w+:)?component[\s>]/g)+', item='+nItems+'\nĐầu resources: '+main.xml.slice(Math.max(i,0),Math.max(i,0)+500))}
+ return{V:Float32Array.from(oV),T:Uint32Array.from(oT),C:Float32Array.from(oC),hasCol};
 }
 
 /* ---------- mesh utils ---------- */
