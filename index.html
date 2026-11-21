@@ -26,8 +26,9 @@ button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weigh
 <h1>✂️ 3MF Splitter</h1>
 <input type="file" id="file" accept=".3mf">
 <div id="log" class="mu">Chọn file 3MF để bắt đầu.</div>
-<p class="mu">Click lên model để chọn vùng. Shift+click để thêm vùng khác.</p>
+<p class="mu">Click lên model để chọn vùng. Shift+click: thêm vùng. Alt hoặc Ctrl+click: bỏ vùng đó khỏi vùng chọn (hoặc đổi ô Khi click).</p>
 <h2>Chọn vùng</h2>
+<label>Khi click</label><select id="op"><option value="new">Chọn mới (thay thế)</option><option value="add">Thêm vào vùng chọn</option><option value="sub">Bỏ khỏi vùng chọn</option></select>
 <label>Cách chọn</label><select id="mode"><option value="shape">Theo hình dạng (dừng ở cạnh / rãnh)</option><option value="color">Theo màu</option></select>
 <div id="gs"><label>Góc dừng <span><b id="v_ang">30</b>°</span></label><input type="range" id="ang" min="5" max="90" value="30">
 <select id="stop"><option value="both">Dừng ở cạnh sắc và rãnh lõm</option><option value="concave">Chỉ dừng ở rãnh lõm</option><option value="sharp">Chỉ dừng ở cạnh lồi sắc</option></select></div>
@@ -200,7 +201,7 @@ function buildGeo(P){const m=P.T.length/3,nv=P.V.length/3,V=P.V,T=P.T,N=new Floa
  P.geo=g;P.nrm=null;P.base=new Uint8Array(m);P.sel=null;P.seed=null;adj(P);paint(P);return g}
 function addPart(P){P.mesh=new THREE.Mesh(buildGeo(P),mat);P.mesh.userData.P=P;group.add(P.mesh);parts.push(P)}
 function refresh(P){P.mesh.geometry.dispose();P.mesh.geometry=buildGeo(P);if(P===active)setActive(P,true);renderList()}
-function setActive(P,force){if(active&&active!==P){active.sel=null;paint(active)}active=P;if(P&&(force||!P.sel)){P.sel=new Uint8Array(P.T.length/3);P.base=new Uint8Array(P.T.length/3);paint(P)}if(moving&&P)tcn.attach(P.mesh);count();renderList()}
+function setActive(P,force){if(active&&active!==P){active.sel=null;paint(active)}active=P;if(P&&(force||!P.sel)){P.sel=new Uint8Array(P.T.length/3);P.base=new Uint8Array(P.T.length/3);P.seed=null;paint(P)}if(moving&&P)tcn.attach(P.mesh);count();renderList()}
 function removePart(P){if(tcn.object===P.mesh)tcn.detach();group.remove(P.mesh);P.geo.dispose();parts=parts.filter(x=>x!==P);if(active===P)active=null;setActive(parts[0]||null)}
 function renderList(){const L=$('parts');L.innerHTML='';parts.forEach(P=>{const d=document.createElement('div');d.className='row'+(P===active?' on':'');
  d.innerHTML='<input type="checkbox"><span></span><button>✕</button>';d.children[0].checked=P.mesh.visible;d.children[0].onchange=e=>P.mesh.visible=e.target.checked;
@@ -230,15 +231,17 @@ function refine(P){const m=P.base.length,g=+$('grow').value,sm=+$('smooth').valu
   if(mode>0){if(!s[t]&&c>0)o[t]=1}else if(mode<0){if(s[t]&&(c<n||n<3))o[t]=0}else{if(s[t]&&c<=1)o[t]=0;else if(!s[t]&&c>=2)o[t]=1}}return o};
  for(let i=0;i<Math.abs(g);i++)s=step(s,Math.sign(g));for(let i=0;i<sm;i++)s=step(s,0);P.sel=s}
 function apply(){const P=active;if(!P)return;refine(P);paint(P);count()}
-function reflood(){const P=active;if(!P||P.seed==null)return;P.base=fillSel(P,P.seed);apply()}
+function doOp(P){const o=fillSel(P,P.seed),b=Uint8Array.from(P.prev),op=P.lastOp;
+ for(let t=0;t<b.length;t++){if(op==='new')b[t]=o[t];else if(op==='add')b[t]|=o[t];else if(o[t])b[t]=0}
+ P.base=b;apply()}
+function reflood(){const P=active;if(!P||P.seed==null||!P.prev)return;doOp(P)}
 let dn=null;const cv=renderer.domElement;
 cv.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
 cv.addEventListener('pointerup',e=>{if(!dn||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>4)return;
  const r=cv.getBoundingClientRect();rc.setFromCamera(new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1),camera);
  const h=rc.intersectObjects(parts.filter(p=>p.mesh.visible).map(p=>p.mesh),false)[0];if(!h)return;
  const P=h.object.userData.P;if(P!==active)setActive(P);if(moving)return;
- const o=fillSel(P,h.faceIndex);
- if(e.shiftKey)for(let t=0;t<o.length;t++)P.base[t]|=o[t];else P.base=o;P.seed=h.faceIndex;apply()});
+  P.prev=Uint8Array.from(P.base);P.lastOp=e.shiftKey?'add':(e.altKey||e.ctrlKey||e.metaKey)?'sub':$('op').value;P.seed=h.faceIndex;doOp(P)});
 
 /* ---------- actions ---------- */
 function fit(V){let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];for(let i=0;i<V.length;i+=3)for(let d=0;d<3;d++){mn[d]=Math.min(mn[d],V[i+d]);mx[d]=Math.max(mx[d],V[i+d])}
