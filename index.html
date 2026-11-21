@@ -42,6 +42,8 @@ button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weigh
 <label>Giữ lại <b id="v_ratio">50</b>% tam giác</label><input type="range" id="ratio" min="5" max="95" value="50">
 <div class="r"><button id="simp">Simplify</button></div>
 <h2>Các phần</h2><div id="parts"></div>
+<div class="r"><button id="mv">Di chuyển</button><button id="mvr">Đặt lại vị trí</button></div>
+<p class="mu">Click vào phần cần di chuyển (hoặc chọn trong danh sách), bấm Di chuyển, rồi kéo mũi tên.</p>
 <h2>Xuất file</h2>
 <label>Chiều lớn nhất (mm, để trống = giữ nguyên)</label><input type="number" id="mm" min="1" placeholder="vd 80">
 <label>Màu</label><select id="cm"><option value="part">Mỗi phần 1 màu (cho slicer)</option><option value="tri">Màu từng tam giác</option></select>
@@ -50,6 +52,7 @@ button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weigh
 </div><div id="view"><div id="busy"><div><div class="sp"></div><b id="bmsg"></b><div id="bar"><i></i></div><div class="mu" id="bt"></div></div></div></div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
 <script>
 const $=id=>document.getElementById(id),log=s=>{$('log').textContent=s;if(bOn)$('bmsg').textContent=s.split('\n')[0]};
@@ -62,6 +65,8 @@ const view=$('view'),renderer=new THREE.WebGLRenderer({antialias:true}),scene=ne
 camera.up.set(0,0,1);scene.background=new THREE.Color(0x8a9099);view.appendChild(renderer.domElement);scene.add(group,camera,new THREE.HemisphereLight(0xffffff,0x777777,.95));
 const dl=new THREE.DirectionalLight(0xffffff,.55);dl.position.set(1,-1,2);camera.add(dl);
 const controls=new THREE.OrbitControls(camera,renderer.domElement);
+const tcn=new THREE.TransformControls(camera,renderer.domElement);tcn.setMode('translate');scene.add(tcn);tcn.addEventListener('dragging-changed',e=>controls.enabled=!e.value);
+let moving=false;
 const mat=new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.DoubleSide});
 function rs(){const w=view.clientWidth,h=view.clientHeight;if(!w||!h)return;renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
 new ResizeObserver(rs).observe(view);rs();
@@ -195,8 +200,8 @@ function buildGeo(P){const m=P.T.length/3,nv=P.V.length/3,V=P.V,T=P.T,N=new Floa
  P.geo=g;P.nrm=null;P.base=new Uint8Array(m);P.sel=null;P.seed=null;adj(P);paint(P);return g}
 function addPart(P){P.mesh=new THREE.Mesh(buildGeo(P),mat);P.mesh.userData.P=P;group.add(P.mesh);parts.push(P)}
 function refresh(P){P.mesh.geometry.dispose();P.mesh.geometry=buildGeo(P);if(P===active)setActive(P,true);renderList()}
-function setActive(P,force){if(active&&active!==P){active.sel=null;paint(active)}active=P;if(P&&(force||!P.sel)){P.sel=new Uint8Array(P.T.length/3);P.base=new Uint8Array(P.T.length/3);paint(P)}count();renderList()}
-function removePart(P){group.remove(P.mesh);P.geo.dispose();parts=parts.filter(x=>x!==P);if(active===P)active=null;setActive(parts[0]||null)}
+function setActive(P,force){if(active&&active!==P){active.sel=null;paint(active)}active=P;if(P&&(force||!P.sel)){P.sel=new Uint8Array(P.T.length/3);P.base=new Uint8Array(P.T.length/3);paint(P)}if(moving&&P)tcn.attach(P.mesh);count();renderList()}
+function removePart(P){if(tcn.object===P.mesh)tcn.detach();group.remove(P.mesh);P.geo.dispose();parts=parts.filter(x=>x!==P);if(active===P)active=null;setActive(parts[0]||null)}
 function renderList(){const L=$('parts');L.innerHTML='';parts.forEach(P=>{const d=document.createElement('div');d.className='row'+(P===active?' on':'');
  d.innerHTML='<input type="checkbox"><span></span><button>✕</button>';d.children[0].checked=P.mesh.visible;d.children[0].onchange=e=>P.mesh.visible=e.target.checked;
  d.children[1].textContent=P.name+' · '+(P.T.length/3).toLocaleString()+' tam giác';d.children[1].onclick=()=>setActive(P);d.children[2].onclick=()=>removePart(P);L.appendChild(d)})}
@@ -231,7 +236,7 @@ cv.addEventListener('pointerdown',e=>dn=[e.clientX,e.clientY]);
 cv.addEventListener('pointerup',e=>{if(!dn||Math.hypot(e.clientX-dn[0],e.clientY-dn[1])>4)return;
  const r=cv.getBoundingClientRect();rc.setFromCamera(new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1),camera);
  const h=rc.intersectObjects(parts.filter(p=>p.mesh.visible).map(p=>p.mesh),false)[0];if(!h)return;
- const P=h.object.userData.P;if(P!==active)setActive(P);
+ const P=h.object.userData.P;if(P!==active)setActive(P);if(moving)return;
  const o=fillSel(P,h.faceIndex);
  if(e.shiftKey)for(let t=0;t<o.length;t++)P.base[t]|=o[t];else P.base=o;P.seed=h.faceIndex;apply()});
 
@@ -247,10 +252,12 @@ $('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;busy('Đang 
 for(const id of ['tol','ang','grow','smooth','ratio'])$(id).oninput=()=>{$('v_'+id).textContent=$(id).value;if(id==='tol'||id==='ang')reflood();else if(id!=='ratio')apply()};
 $('adj').onchange=$('stop').onchange=reflood;
 $('mode').onchange=()=>{const sh=$('mode').value==='shape';$('gs').style.display=sh?'':'none';$('gc').style.display=sh?'none':'';reflood()};
+$('mv').onclick=()=>{moving=!moving;$('mv').textContent=moving?'Dừng di chuyển':'Di chuyển';if(moving&&active){tcn.attach(active.mesh);log('Kéo mũi tên để di chuyển. Click phần khác để đổi phần.')}else tcn.detach()};
+$('mvr').onclick=()=>{if(active){active.mesh.position.set(0,0,0)}};
 $('clr').onclick=()=>{if(!active)return;active.base.fill(0);active.seed=null;apply()};
 $('cut').onclick=()=>{const P=active;if(!P||!P.sel)return;let n=0;for(const v of P.sel)n+=v;if(!n||n===P.sel.length){log('Hãy chọn một phần của model (không phải rỗng hoặc toàn bộ).');return}
  busy('Đang cắt...');setTimeout(()=>{const A=sub(P,t=>P.sel[t]===1),B=sub(P,t=>!P.sel[t]),ha=cap(A),hb=cap(B);cnt++;
-  removePart(P);A.name='Phần tách '+cnt;B.name='Phần còn lại '+cnt;addPart(A);addPart(B);setActive(B);log('Đã tách. Bịt '+ha+' lỗ ở phần tách, '+hb+' lỗ ở phần còn lại.');busy(false)},30)};
+  const pos=P.mesh.position.clone();removePart(P);A.name='Phần tách '+cnt;B.name='Phần còn lại '+cnt;addPart(A);addPart(B);A.mesh.position.copy(pos);B.mesh.position.copy(pos);setActive(B);log('Đã tách. Bịt '+ha+' lỗ ở phần tách, '+hb+' lỗ ở phần còn lại.');busy(false)},30)};
 $('fix').onclick=()=>{const P=active;if(!P)return;busy('Đang fix model...');setTimeout(()=>{const s0=stats(P);dedupe(P);adj(P);removeSmall(P);adj(P);orient(P);const h=cap(P);adj(P);orient(P);refresh(P);const s1=stats(P);
  log('Trước: '+s0.t+' tam giác, '+s0.open+' cạnh hở, '+s0.c+' mảnh.\nSau: '+s1.t+' tam giác, '+s1.open+' cạnh hở, '+s1.c+' mảnh. Bịt '+h+' lỗ.');busy(false)},30)};
 $('simp').onclick=()=>{const P=active;if(!P)return;busy('Đang simplify...');setTimeout(()=>{
@@ -267,11 +274,11 @@ $('simp').onclick=()=>{const P=active;if(!P)return;busy('Đang simplify...');set
  Object.assign(P,{V:nV,T:Uint32Array.from(nT),C:Float32Array.from(nC)});dedupe(P);refresh(P);log('Simplify: '+m+' → '+P.T.length/3+' tam giác. Nên bấm Fix model sau đó.');busy(false)},30)};
 $('exp').onclick=async()=>{busy('Đang tạo file 3MF...');await tick();
  const vis=parts.filter(p=>p.mesh.visible);if(!vis.length){busy(false);return}let mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];
- for(const P of vis)for(let i=0;i<P.V.length;i+=3)for(let k=0;k<3;k++){mn[k]=Math.min(mn[k],P.V[i+k]);mx[k]=Math.max(mx[k],P.V[i+k])}
+ for(const P of vis){const o=P.mesh.position.toArray();for(let i=0;i<P.V.length;i+=3)for(let k=0;k<3;k++){const v=P.V[i+k]+o[k];mn[k]=Math.min(mn[k],v);mx[k]=Math.max(mx[k],v)}}
  const mmv=+$('mm').value,s=mmv>0?mmv/Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]):1,per=$('cm').value==='part',H=c=>c.map(x=>Math.round(x*255).toString(16).padStart(2,'0')).join('');
  let res='',obj='',items='';
  vis.forEach((P,i)=>{const rid=2*i+1,oid=2*i+2,m=P.T.length/3,vx=[],tx=[],nm='Part '+(i+1);
-  for(let j=0;j<P.V.length;j+=3)vx.push('<vertex x="'+(P.V[j]*s).toFixed(4)+'" y="'+(P.V[j+1]*s).toFixed(4)+'" z="'+(P.V[j+2]*s).toFixed(4)+'"/>');
+  const o=P.mesh.position.toArray();for(let j=0;j<P.V.length;j+=3)vx.push('<vertex x="'+((P.V[j]+o[0])*s).toFixed(4)+'" y="'+((P.V[j+1]+o[1])*s).toFixed(4)+'" z="'+((P.V[j+2]+o[2])*s).toFixed(4)+'"/>');
   if(per){const a=[0,0,0];for(let t=0;t<m;t++)for(let k=0;k<3;k++)a[k]+=P.C[3*t+k]/m;res+='<basematerials id="'+rid+'"><base name="'+nm+'" displaycolor="#'+H(a)+'"/></basematerials>';
    for(let t=0;t<m;t++)tx.push('<triangle v1="'+P.T[3*t]+'" v2="'+P.T[3*t+1]+'" v3="'+P.T[3*t+2]+'"/>');
    obj+='<object id="'+oid+'" type="model" name="'+nm+'" pid="'+rid+'" pindex="0"><mesh><vertices>'+vx.join('')+'</vertices><triangles>'+tx.join('')+'</triangles></mesh></object>'}
