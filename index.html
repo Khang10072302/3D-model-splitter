@@ -29,7 +29,8 @@ button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weigh
 <p class="mu">Click lên model để chọn vùng. Shift+click: thêm vùng. Alt hoặc Ctrl+click: bỏ vùng đó khỏi vùng chọn (hoặc đổi ô Khi click).</p>
 <h2>Chọn vùng</h2>
 <label>Khi click</label><select id="op"><option value="new">Chọn mới (thay thế)</option><option value="add">Thêm vào vùng chọn</option><option value="sub">Bỏ khỏi vùng chọn</option></select>
-<label>Cách chọn</label><select id="mode"><option value="shape">Theo hình dạng (dừng ở cạnh / rãnh)</option><option value="color">Theo màu</option></select>
+<label>Cách chọn (khi chọn / thêm)</label><select id="mode"><option value="shape">Theo hình dạng (dừng ở cạnh / rãnh)</option><option value="color">Theo màu</option></select>
+<label>Cách bỏ chọn (Alt+click)</label><select id="smode"><option value="shape">Theo hình dạng (chỉ vùng tại chỗ)</option><option value="color">Theo màu</option></select>
 <div id="gs"><label>Góc dừng <span><b id="v_ang">30</b>°</span></label><input type="range" id="ang" min="5" max="90" value="30">
 <select id="stop"><option value="both">Dừng ở cạnh sắc và rãnh lõm</option><option value="concave">Chỉ dừng ở rãnh lõm</option><option value="sharp">Chỉ dừng ở cạnh lồi sắc</option></select></div>
 <div id="gc" style="display:none"><label>Độ lệch màu <b id="v_tol">12</b></label><input type="range" id="tol" min="0" max="60" value="12">
@@ -67,7 +68,11 @@ camera.up.set(0,0,1);scene.background=new THREE.Color(0x8a9099);view.appendChild
 const dl=new THREE.DirectionalLight(0xffffff,.55);dl.position.set(1,-1,2);camera.add(dl);
 const controls=new THREE.OrbitControls(camera,renderer.domElement);
 const tcn=new THREE.TransformControls(camera,renderer.domElement);tcn.setMode('translate');scene.add(tcn);tcn.addEventListener('dragging-changed',e=>controls.enabled=!e.value);
-let moving=false;
+let moving=false,pivotPart=null;
+const pivot=new THREE.Object3D();group.add(pivot);
+function ctr(P){if(!P.ctr){const mn=[1e30,1e30,1e30],mx=[-1e30,-1e30,-1e30];for(let i=0;i<P.V.length;i+=3)for(let k=0;k<3;k++){const v=P.V[i+k];if(v<mn[k])mn[k]=v;if(v>mx[k])mx[k]=v}P.ctr=new THREE.Vector3((mn[0]+mx[0])/2,(mn[1]+mx[1])/2,(mn[2]+mx[2])/2)}return P.ctr}
+function attachTo(P){pivotPart=P;pivot.position.copy(ctr(P)).add(P.mesh.position);tcn.attach(pivot)}
+tcn.addEventListener('objectChange',()=>{if(pivotPart)pivotPart.mesh.position.copy(pivot.position).sub(ctr(pivotPart))});
 const mat=new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.DoubleSide});
 function rs(){const w=view.clientWidth,h=view.clientHeight;if(!w||!h)return;renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix()}
 new ResizeObserver(rs).observe(view);rs();
@@ -198,11 +203,11 @@ function buildGeo(P){const m=P.T.length/3,nv=P.V.length/3,V=P.V,T=P.T,N=new Floa
  const pos=new Float32Array(m*9),nor=new Float32Array(m*9);
  for(let t=0;t<m;t++)for(let k=0;k<3;k++){const i=T[3*t+k]*3;for(let d=0;d<3;d++){pos[t*9+k*3+d]=V[i+d];nor[t*9+k*3+d]=N[i+d]}}
  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));g.setAttribute('normal',new THREE.BufferAttribute(nor,3));g.setAttribute('color',new THREE.BufferAttribute(new Float32Array(m*9),3));
- P.geo=g;P.nrm=null;P.base=new Uint8Array(m);P.sel=null;P.seed=null;adj(P);paint(P);return g}
+ P.geo=g;P.nrm=null;P.ctr=null;P.base=new Uint8Array(m);P.sel=null;P.seed=null;adj(P);paint(P);return g}
 function addPart(P){P.mesh=new THREE.Mesh(buildGeo(P),mat);P.mesh.userData.P=P;group.add(P.mesh);parts.push(P)}
 function refresh(P){P.mesh.geometry.dispose();P.mesh.geometry=buildGeo(P);if(P===active)setActive(P,true);renderList()}
-function setActive(P,force){if(active&&active!==P){active.sel=null;paint(active)}active=P;if(P&&(force||!P.sel)){P.sel=new Uint8Array(P.T.length/3);P.base=new Uint8Array(P.T.length/3);P.seed=null;paint(P)}if(moving&&P)tcn.attach(P.mesh);count();renderList()}
-function removePart(P){if(tcn.object===P.mesh)tcn.detach();group.remove(P.mesh);P.geo.dispose();parts=parts.filter(x=>x!==P);if(active===P)active=null;setActive(parts[0]||null)}
+function setActive(P,force){if(active&&active!==P){active.sel=null;paint(active)}active=P;if(P&&(force||!P.sel)){P.sel=new Uint8Array(P.T.length/3);P.base=new Uint8Array(P.T.length/3);P.seed=null;paint(P)}if(moving&&P)attachTo(P);count();renderList()}
+function removePart(P){if(pivotPart===P){tcn.detach();pivotPart=null}group.remove(P.mesh);P.geo.dispose();parts=parts.filter(x=>x!==P);if(active===P)active=null;setActive(parts[0]||null)}
 function renderList(){const L=$('parts');L.innerHTML='';parts.forEach(P=>{const d=document.createElement('div');d.className='row'+(P===active?' on':'');
  d.innerHTML='<input type="checkbox"><span></span><button>✕</button>';d.children[0].checked=P.mesh.visible;d.children[0].onchange=e=>P.mesh.visible=e.target.checked;
  d.children[1].textContent=P.name+' · '+(P.T.length/3).toLocaleString()+' tam giác';d.children[1].onclick=()=>setActive(P);d.children[2].onclick=()=>removePart(P);L.appendChild(d)})}
@@ -225,7 +230,7 @@ function floodShape(P,seed,ang,stop){geo(P);const m=P.T.length/3,out=new Uint8Ar
    if(stop==='both'||(stop==='concave'&&conc)||(stop==='sharp'&&!conc))continue}
   out[n]=1;st.push(n)}}
  return out}
-function fillSel(P,seed){return $('mode').value==='shape'?floodShape(P,seed,+$('ang').value,$('stop').value):flood(P,seed,+$('tol').value/100,!$('adj').checked)}
+function fillSel(P,seed){const md=P.lastOp==='sub'?$('smode').value:$('mode').value;return md==='shape'?floodShape(P,seed,+$('ang').value,$('stop').value):flood(P,seed,+$('tol').value/100,!$('adj').checked)}
 function refine(P){const m=P.base.length,g=+$('grow').value,sm=+$('smooth').value;let s=Uint8Array.from(P.base);
  const step=(s,mode)=>{const o=Uint8Array.from(s);for(let t=0;t<m;t++){let c=0,n=0;for(let e=0;e<3;e++){const q=P.nb[3*t+e];if(q>=0){n++;c+=s[q]}}
   if(mode>0){if(!s[t]&&c>0)o[t]=1}else if(mode<0){if(s[t]&&(c<n||n<3))o[t]=0}else{if(s[t]&&c<=1)o[t]=0;else if(!s[t]&&c>=2)o[t]=1}}return o};
@@ -254,9 +259,9 @@ $('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;busy('Đang 
   log('Đã nạp '+P.T.length/3+' tam giác, '+P.V.length/3+' điểm.\nKích thước: '+[0,1,2].map(d=>(mx[d]-mn[d]).toPrecision(4)).join(' × ')+'\nMàu trung bình RGB: '+cm.map(x=>x.toFixed(2)).join(', ')+(P.T.length/3>4e5?'\nModel rất nặng: nên Simplify xuống khoảng 200k trước khi chọn vùng.':'')+'\nDữ liệu màu: '+g.info)}}catch(err){log('Lỗi: '+err.message)}busy(false)};
 for(const id of ['tol','ang','grow','smooth','ratio'])$(id).oninput=()=>{$('v_'+id).textContent=$(id).value;if(id==='tol'||id==='ang')reflood();else if(id!=='ratio')apply()};
 $('adj').onchange=$('stop').onchange=reflood;
-$('mode').onchange=()=>{const sh=$('mode').value==='shape';$('gs').style.display=sh?'':'none';$('gc').style.display=sh?'none':'';reflood()};
-$('mv').onclick=()=>{moving=!moving;$('mv').textContent=moving?'Dừng di chuyển':'Di chuyển';if(moving&&active){tcn.attach(active.mesh);log('Kéo mũi tên để di chuyển. Click phần khác để đổi phần.')}else tcn.detach()};
-$('mvr').onclick=()=>{if(active){active.mesh.position.set(0,0,0)}};
+$('mode').onchange=$('smode').onchange=()=>{const a=$('mode').value,b=$('smode').value;$('gs').style.display=(a==='shape'||b==='shape')?'':'none';$('gc').style.display=(a==='color'||b==='color')?'':'none';reflood()};
+$('mv').onclick=()=>{moving=!moving;$('mv').textContent=moving?'Dừng di chuyển':'Di chuyển';if(moving&&active){attachTo(active);log('Kéo mũi tên để di chuyển. Click phần khác để đổi phần.')}else{tcn.detach();pivotPart=null}};
+$('mvr').onclick=()=>{if(active){active.mesh.position.set(0,0,0);if(moving)attachTo(active)}};
 $('clr').onclick=()=>{if(!active)return;active.base.fill(0);active.seed=null;apply()};
 $('cut').onclick=()=>{const P=active;if(!P||!P.sel)return;let n=0;for(const v of P.sel)n+=v;if(!n||n===P.sel.length){log('Hãy chọn một phần của model (không phải rỗng hoặc toàn bộ).');return}
  busy('Đang cắt...');setTimeout(()=>{const A=sub(P,t=>P.sel[t]===1),B=sub(P,t=>!P.sel[t]),ha=cap(A),hb=cap(B);cnt++;
